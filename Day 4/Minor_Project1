@@ -1,0 +1,216 @@
+import os
+from pathlib import Path
+from pyexpat import model
+from dotenv import load_dotenv
+from groq import BaseModel, Groq  
+
+load_dotenv()
+
+my_api_key = os.getenv("GROQ_API_KEY")
+
+if not my_api_key:
+    raise ValueError("GROQ_API_KEY environment variable is not set.")
+
+client = Groq(api_key=my_api_key)
+model = "openai/gpt-oss-120b"
+
+job_description = """
+Description: As an SDE 1 on the DEX Speed Tech team, you'll develop customer-facing features for sub-same day (SSD) and ultra-fast delivery services. You'll work in a dynamic environment where your code directly impacts customer experience and delivery operations.
+
+Key job responsibilities
+In this role, you will:
+
+1) Design and implement scalable software solutions for Speed shopping experience
+2) Collaborate with cross-functional teams to build customer-facing features
+3) Write clean, maintainable code with appropriate test coverage
+4) Participate in code reviews and technical design discussions
+5) Debug production issues and implement improvements
+6) Contribute to team's technical documentation
+
+A day in the life
+You will be working in a fast-paced environment, on a team of smart software engineers, to design and build the right technical solutions to meet the needs of the business. You will have direct ownership over the design of new components aimed at improving the platform's extensibility, scalability, availability, and latency. We care about both delighting customers and high quality software; we don’t sacrifice one for the other. We’re looking for someone with a demonstrated track record of highly-scalable, global software solutions.
+
+About the team
+Delivery speed is one of the biggest areas of investment for the Consumer business. We are the team responsible for launching Sub-Same-Day Delivery and Rush shopping experiences for customers, and we're looking for the right Engineers to help us tackle a bold, boundary-pushing agenda.
+
+Basic Qualifications
+- 3+ years of non-internship professional software development experience
+- 2+ years of non-internship design or architecture (design patterns, reliability and scaling) of new and existing systems experience
+- Experience programming with at least one software programming language
+
+Preferred Qualifications
+- 3+ years of full software development life cycle, including coding standards, code reviews, source control management, build processes, testing, and operations experience
+- Bachelor's degree in computer science or equivalent"""
+
+class JobDescription(BaseModel):
+    role : str
+    required_skills : list[str]
+    preferred_skills : list[str]
+    minimum_experience : str
+    education : str
+    responsibilities : list[str]
+
+JobDescriptionSchema = JobDescription.model_json_schema()
+
+system_prompt = f"""
+You are an expert HR assistant. 
+Your job is to analyze job descriptions and extract relevant information.
+Return ONLY VALID JSON that conforms to the following schema:
+
+{JobDescriptionSchema}
+IMPORTANT: Do not return the schema itself,
+DO NOT return fields like "properties", "title" and "type"
+Fill the schema with the actual data extracted from the job description.
+If minimum experience is not explicitly mentioned, return "Not specified".
+If education is not explicitly mentioned, return "Not specified".
+If information is not available, return an empty list for that field.
+Do not invent information. If a field is not mentioned in the job description, return an empty list for that field.
+"""
+user_prompt = f"""
+Analyize the following job description and extract relevant information according to the schema provided in the system prompt.
+
+{JobDescription}
+"""
+message_system = {
+    "role": "system",
+    "content": system_prompt
+}
+
+message_user = {
+    "role": "user",
+    "content": user_prompt
+}
+
+response_format = {
+    "type": "json",
+}
+
+messages = [message_system, message_user]
+response = client.chat.completions.create( model = model , messages = messages, response_format = response_format)
+answer = response.choices[0].message.content
+raw_json =  answer
+print(raw_json)
+
+import json
+job_data = json.loads(raw_json)
+
+print(job_data["minimum_experience"])
+print(job_data["education"])
+
+#part 2
+
+class MatchResult(BaseModel):
+    score : float
+    details : dict
+class Experience(BaseModel):
+    company : str | None = None
+    role : str | None = None
+    duration : str | None = None
+    description : str | None = None
+    skills : list[str] = []
+class Resume(BaseModel):
+    name : str
+    email : str
+    phone : str
+    summary : str | None = None
+    experiences : list[Experience] = []
+    skills : list[str] = []
+    experience_years : float | None = None
+    projects : list[dict] = []
+    certifications : list[str] = []
+
+resume_schema = Resume.model_json_schema()
+def final_score(job , resume):
+    match_schema = MatchResult.model_json_schema()
+    prompt = f"""
+    You are an expert HR assistant.
+    Your job is to analyze a job description and a resume, and provide a match score based on the following criteria:
+    
+    Compare the candidate's skills, experience, and qualifications with the requirements of the job description.
+    Return ONLY VALID JSON that conforms to the following schema:
+
+    1. The match score should be a float between 0 and 1, where 1 indicates a perfect match and 0 indicates no match.
+    2. The details field should contain a dictionary with the following keys:
+        - "skills_match": a list of skills that match between the job description and the resume.
+        - "experience_match": a list of experiences that match between the job description and the resume.
+        - "education_match": a boolean indicating whether the candidate's education matches the job requirements.
+        - "certifications_match": a list of certifications that match between the job description and the resume.
+    3. If any information is not available, return an empty list or False for that field.
+    4. Do not invent information. If a field is not mentioned in the job description or resume, return an empty list or False for that field.
+    
+    """
+    message = {
+        "role": "user",
+        "content": prompt
+    }
+
+    messages = [message_system, message, {
+        "type" : "json_object"
+    }]
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_format=response_format)
+    data = json.loads(response.choices[0].message.content)
+    return MatchResult(**data)
+
+def parse_resume(resume_text):
+    prompt = f"""
+    You are an expert HR assistant.
+    Your job is to analyze a resume and extract relevant information.
+    Return ONLY VALID JSON that conforms to the following schema:
+
+    {resume_schema}
+    IMPORTANT: Do not return the schema itself,
+    DO NOT return fields like "properties", "title" and "type"
+    Fill the schema with the actual data extracted from the resume.
+    If information is not available, return an empty list for that field.
+    Do not invent information. If a field is not mentioned in the resume, return an empty list for that field.
+    """
+
+    user_prompt = f"""
+Analyze the following resume and extract relevant information according to the schema provided in the system prompt.
+{resume_text}"""
+
+    message_system = {
+        "role": "system",
+        "content": prompt
+    }
+
+    message_user = {
+        "role": "user",
+        "content": user_prompt
+    }
+
+   
+    messages = [message_system, message_user, {
+        "type" : "json_object"
+    }]
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_format=response_format)
+    raw_output =  response.choices[0].message.content
+    data = json.loads(raw_output)
+    resume = Resume(**data)
+    return resume
+
+from pypdf import PdfReader
+from docx import Document
+def read_pdf(file_path):
+    reader = PdfReader(file_path)
+    text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
+
+def read_docx(file_path):
+    doc = Document(file_path)
+    text = ""
+    for para in doc.paragraphs:
+        text += para.text + "\n"
+    return text
